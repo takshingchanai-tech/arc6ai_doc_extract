@@ -20,21 +20,6 @@ app.post('/extract', async (c) => {
     return c.json({ error: 'Missing file field' }, 400)
   }
 
-  const schemaRaw = formData.get('schema')
-  let schema: string[] | undefined
-  if (schemaRaw && typeof schemaRaw === 'string') {
-    try {
-      const parsed = JSON.parse(schemaRaw) as unknown
-      if (Array.isArray(parsed)) {
-        schema = parsed as string[]
-      } else if (typeof parsed === 'object' && parsed !== null && 'fields' in parsed) {
-        schema = (parsed as { fields: string[] }).fields
-      }
-    } catch {
-      return c.json({ error: 'Invalid schema JSON' }, 400)
-    }
-  }
-
   const arrayBuffer = await file.arrayBuffer()
   const buffer = Buffer.from(arrayBuffer)
 
@@ -43,7 +28,6 @@ app.post('/extract', async (c) => {
       buffer,
       filename: file.name,
       mimetype: file.type || undefined,
-      schema
     })
     return c.json(result)
   } catch (err) {

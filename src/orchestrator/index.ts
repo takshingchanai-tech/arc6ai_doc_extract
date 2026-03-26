@@ -3,15 +3,17 @@ import { extract } from '../extractor/index.js'
 import { judge } from '../judge/index.js'
 import { extractWithVision } from '../vision/index.js'
 
+// Only these formats can be re-processed by the vision model
+const VISION_COMPATIBLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'])
+
 export interface ExtractionRequest {
   buffer: Buffer
   filename: string
   mimetype?: string
-  schema?: string[]  // optional list of field names to extract
 }
 
 export interface ExtractionResponse {
-  result: Record<string, unknown> | string
+  content: string          // full extracted content formatted as Markdown
   method: 'text' | 'vision'
   escalated: boolean
   confidence: 'high' | 'low'
@@ -19,41 +21,34 @@ export interface ExtractionResponse {
   format: string
 }
 
-async function structureWithLLM(
-  client: OpenAI,
-  text: string,
-  schema?: string[]
-): Promise<Record<string, unknown> | string> {
-  if (!schema?.length) return text
-
+async function formatAsMarkdown(client: OpenAI, text: string, filename: string): Promise<string> {
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0,
-    max_tokens: 1000,
+    max_tokens: 4000,
     messages: [
       {
         role: 'system',
-        content: `Extract the following fields from the document text and return as JSON: ${schema.join(', ')}. If a field is not found, set it to null. Return only valid JSON.`
+        content: `You are a document formatter. Format the following extracted document content as clean, well-structured Markdown.
+
+Rules:
+- Preserve ALL content — do not summarise, omit, or analyse anything
+- Add clear structure: use # for the document title, ## for sections, bullet points for lists, and | tables | for tabular data
+- Clean up redundant whitespace and OCR artifacts but keep all words
+- For spreadsheets/CSV: render data as Markdown tables
+- For presentations: use ## Slide N as headers
+- Do not add commentary, interpretation, or analysis
+- Output only the formatted Markdown, nothing else`
       },
       {
         role: 'user',
-        content: text.slice(0, 8000)  // stay within token budget
+        content: `Filename: ${filename}\n\n${text.slice(0, 12000)}`
       }
     ]
   })
 
-  try {
-    const content = response.choices[0].message.content ?? '{}'
-    // Strip markdown code fences if present
-    const cleaned = content.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
-    return JSON.parse(cleaned) as Record<string, unknown>
-  } catch {
-    return text
-  }
+  return response.choices[0].message.content ?? text
 }
-
-// Only these formats can be re-processed by the vision model
-const VISION_COMPATIBLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'])
 
 export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -70,39 +65,33 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
     rawText = extracted.text
     format = extracted.format
 
-    // Step 2: Judge quality — but only escalate if format supports vision
+    // Step 2: Judge quality — only escalate if format supports vision
     if (VISION_COMPATIBLE.has(format)) {
-      const verdict = await judge(client, rawText, extracted.sizeBytes, req.schema)
+      const verdict = await judge(client, rawText, extracted.sizeBytes)
       if (verdict.escalate) {
         escalated = true
         judgeReason = verdict.reason
-        rawText = await extractWithVision(client, req.buffer, req.filename, req.schema)
+        rawText = await extractWithVision(client, req.buffer, req.filename)
         method = 'vision'
       }
     }
 
-    // Step 3: Structure output if schema provided
-    const result = await structureWithLLM(client, rawText, req.schema)
+    // Step 3: Format full content as clean Markdown (no information loss)
+    const content = await formatAsMarkdown(client, rawText, req.filename)
 
-    return {
-      result,
-      method,
-      escalated,
-      confidence: escalated ? 'low' : 'high',
-      reason: judgeReason,
-      format
-    }
+    return { content, method, escalated, confidence: escalated ? 'low' : 'high', reason: judgeReason, format }
+
   } catch (err) {
-    // Text extraction failed entirely — try vision only if format supports it
+    // Text extraction failed — try vision only if format supports it
     const ext = req.filename.split('.').pop()?.toLowerCase() ?? 'unknown'
     if (!VISION_COMPATIBLE.has(ext)) {
       throw new Error(`Extraction failed: ${(err as Error).message}`)
     }
     try {
-      rawText = await extractWithVision(client, req.buffer, req.filename, req.schema)
-      const result = await structureWithLLM(client, rawText, req.schema)
+      rawText = await extractWithVision(client, req.buffer, req.filename)
+      const content = await formatAsMarkdown(client, rawText, req.filename)
       return {
-        result,
+        content,
         method: 'vision',
         escalated: true,
         confidence: 'low',

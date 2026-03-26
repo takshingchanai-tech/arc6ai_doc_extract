@@ -14,7 +14,6 @@ app.use('*', cors())
 app.get('/health', (c) => c.json({ status: 'ok', service: 'arc6ai_doc_extract' }))
 
 app.post('/extract', async (c) => {
-  // Inject OPENAI_API_KEY from CF Workers env into process.env
   const env = c.env as Record<string, string>
   if (env.OPENAI_API_KEY) {
     process.env.OPENAI_API_KEY = env.OPENAI_API_KEY
@@ -32,21 +31,6 @@ app.post('/extract', async (c) => {
     return c.json({ error: 'Missing file field' }, 400)
   }
 
-  const schemaRaw = formData.get('schema')
-  let schema: string[] | undefined
-  if (schemaRaw && typeof schemaRaw === 'string') {
-    try {
-      const parsed = JSON.parse(schemaRaw) as unknown
-      if (Array.isArray(parsed)) {
-        schema = parsed as string[]
-      } else if (typeof parsed === 'object' && parsed !== null && 'fields' in parsed) {
-        schema = (parsed as { fields: string[] }).fields
-      }
-    } catch {
-      return c.json({ error: 'Invalid schema JSON' }, 400)
-    }
-  }
-
   const arrayBuffer = await file.arrayBuffer()
   const buffer = Buffer.from(arrayBuffer)
 
@@ -55,7 +39,6 @@ app.post('/extract', async (c) => {
       buffer,
       filename: file.name,
       mimetype: file.type || undefined,
-      schema
     })
     return c.json(result)
   } catch (err) {
