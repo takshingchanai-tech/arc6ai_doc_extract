@@ -2,7 +2,7 @@
 
 **Document Intelligence skill** — part of the [Arc6AI](https://arc6ai.com) agent suite.
 
-Extracts structured data from PDF, DOCX, XLSX, CSV, and TXT files using a cost-optimised Judge-Router pipeline.
+Extracts and formats the full content of documents as clean Markdown using a cost-optimised Judge-Router pipeline. Supports 13 file formats. Vision escalation is delegated to `arc6ai_visual_intelligence`.
 
 ## How it works
 
@@ -10,28 +10,32 @@ Extracts structured data from PDF, DOCX, XLSX, CSV, and TXT files using a cost-o
 Incoming file
      │
      ▼
-[Extractor]  unpdf / mammoth / SheetJS  (near-zero cost)
+[Extractor]  unpdf / mammoth / SheetJS / fflate  (near-zero cost)
      │
      ▼
-[Judge]      gpt-4o-mini quality scoring
+[Judge]      gpt-4o-mini quality scoring  (heuristics first, LLM if needed)
      │
-     ├── quality: high  ──▶  structure with gpt-4o-mini  ──▶  return ✓
+     ├── quality: high  ──▶  formatAsMarkdown (gpt-4o-mini, chunked)  ──▶  return ✓
      │
-     └── quality: low   ──▶  gpt-4o vision re-extraction  ──▶  return ✓
+     └── quality: low   ──▶  arc6ai_visual_intelligence/analyze  ──▶  formatAsMarkdown  ──▶  return ✓
 ```
 
-90%+ of documents hit the cheap text path. Vision is only used when text extraction fails or quality is low.
+90%+ of documents hit the cheap text path. Vision is only triggered when the judge flags low quality on PDF/image formats. Vision calls are delegated to `arc6ai_visual_intelligence` — no duplicated vision logic.
 
 ## Supported formats
 
-| Format | Method |
+| Format | Extractor |
 |---|---|
-| PDF (text layer) | unpdf (edge-compatible, WebAssembly pdf.js) |
-| PDF (scanned / image) | gpt-4o vision (auto-escalated by judge) |
+| PDF (text layer) | unpdf (WebAssembly pdf.js, edge-compatible) |
+| PDF (scanned/image) | arc6ai_visual_intelligence (vision, auto-escalated by judge) |
 | Word `.docx` | mammoth |
-| Excel `.xlsx` | SheetJS |
+| Excel `.xlsx` / `.xls` | SheetJS |
+| PowerPoint `.pptx` | fflate (unzip + XML) |
+| OpenDocument `.odt` / `.ods` / `.odp` | fflate (unzip + XML) |
 | CSV | raw text |
 | Plain text `.txt` | raw text |
+| JSON | pretty-printed raw |
+| Markdown `.md` | raw text |
 
 ## Quick start
 
@@ -47,29 +51,23 @@ npm run dev               # http://localhost:3001
 
 ### `POST /extract`
 
-Upload a file and optionally specify fields to extract.
+Upload a file. Returns full content formatted as Markdown — no information lost.
 
 ```bash
-# Extract everything from a PDF
+# Extract a PDF
 curl -X POST http://localhost:3001/extract \
-  -F "file=@invoice.pdf"
+  -F "file=@report.pdf"
 
-# Extract specific fields
+# Extract a spreadsheet
 curl -X POST http://localhost:3001/extract \
-  -F "file=@invoice.pdf" \
-  -F 'schema=["vendor","total","date","invoice_number"]'
+  -F "file=@data.xlsx"
 ```
 
 **Response:**
 
 ```json
 {
-  "result": {
-    "vendor": "Acme Corp",
-    "total": "$1,250.00",
-    "date": "2026-03-20",
-    "invoice_number": "INV-0042"
-  },
+  "content": "# Q3 Revenue Report\n\n## Executive Summary\n\nRevenue grew 24% YoY...",
   "method": "text",
   "escalated": false,
   "confidence": "high",
@@ -77,11 +75,11 @@ curl -X POST http://localhost:3001/extract \
 }
 ```
 
-If the judge detects low quality (e.g. scanned PDF), it auto-escalates to vision:
+If the judge detects low quality (e.g. scanned PDF), it auto-escalates to vision via `arc6ai_visual_intelligence`:
 
 ```json
 {
-  "result": { "vendor": "Acme Corp", "total": "$1,250.00" },
+  "content": "# Invoice\n\n| Field | Value |\n|---|---|\n| Vendor | Acme Corp |...",
   "method": "vision",
   "escalated": true,
   "confidence": "low",

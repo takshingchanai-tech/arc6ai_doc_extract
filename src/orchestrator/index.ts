@@ -1,7 +1,23 @@
 import OpenAI from 'openai'
 import { extract } from '../extractor/index.js'
 import { judge } from '../judge/index.js'
-import { extractWithVision } from '../vision/index.js'
+
+const VISUAL_INTELLIGENCE_URL = 'https://arc6ai-visual-intelligence.takshingchanai.workers.dev/analyze'
+
+async function callVisualIntelligence(buffer: Buffer, filename: string): Promise<string> {
+  const formData = new FormData()
+  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
+  formData.append('file', new File([arrayBuffer], filename))
+  formData.append('prompt', 'Extract all text and structured content from this document. Transcribe everything accurately and format as clean Markdown.')
+
+  const res = await fetch(VISUAL_INTELLIGENCE_URL, { method: 'POST', body: formData })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string }
+    throw new Error(err.error ?? `Visual intelligence call failed: ${res.status}`)
+  }
+  const data = await res.json() as { content: string }
+  return data.content
+}
 
 // Only these formats can be re-processed by the vision model
 const VISION_COMPATIBLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'])
@@ -112,7 +128,7 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
       if (verdict.escalate) {
         escalated = true
         judgeReason = verdict.reason
-        rawText = await extractWithVision(client, req.buffer, req.filename)
+        rawText = await callVisualIntelligence(req.buffer, req.filename)
         method = 'vision'
       }
     }
@@ -129,7 +145,7 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
       throw new Error(`Extraction failed: ${(err as Error).message}`)
     }
     try {
-      rawText = await extractWithVision(client, req.buffer, req.filename)
+      rawText = await callVisualIntelligence(req.buffer, req.filename)
       const content = await formatAsMarkdown(client, rawText, req.filename)
       return {
         content,
