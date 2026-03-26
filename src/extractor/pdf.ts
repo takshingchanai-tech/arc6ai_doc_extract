@@ -1,8 +1,7 @@
-import { createRequire } from 'module'
-const require = createRequire(import.meta.url)
-const pdfParse = require('pdf-parse') as (buffer: Buffer) => Promise<{ text: string }>
+import { extractText, getDocumentProxy } from 'unpdf'
 
 export async function extractPdf(buffer: Buffer): Promise<string> {
-  const data = await pdfParse(buffer)
-  return data.text
+  const pdf = await getDocumentProxy(new Uint8Array(buffer))
+  const { text } = await extractText(pdf, { mergePages: true })
+  return text
 }

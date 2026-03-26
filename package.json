@@ -14,12 +14,11 @@
     "hono": "^4.12.9",
     "mammoth": "^1.8",
     "openai": "^4.73",
-    "pdf-parse": "^1.1.1",
+    "unpdf": "^1.4.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22",
-    "@types/pdf-parse": "^1.1.4",
     "dotenv": "^16",
     "tsx": "^4.19",
     "typescript": "^5.7",
