@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc --noEmit",
+    "build": "tsc --noEmit && wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
     "start": "node --import tsx/esm src/server.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13",
-    "hono": "^4.6",
+    "hono": "^4.12.9",
     "mammoth": "^1.8",
     "openai": "^4.73",
     "pdf-parse": "^1.1.1",
@@ -21,6 +22,7 @@
     "@types/pdf-parse": "^1.1.4",
     "dotenv": "^16",
     "tsx": "^4.19",
-    "typescript": "^5.7"
+    "typescript": "^5.7",
+    "wrangler": "^4.77.0"
   }
 }
