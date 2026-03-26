@@ -1,8 +1,10 @@
 import { extractPdf } from './pdf.js'
 import { extractDocx } from './docx.js'
 import { extractXlsx } from './xlsx.js'
+import { extractPptx } from './pptx.js'
+import { extractOdf } from './odf.js'
 
-export type FileFormat = 'pdf' | 'docx' | 'xlsx' | 'xls' | 'csv' | 'txt' | 'json' | 'md' | 'unknown'
+export type FileFormat = 'pdf' | 'docx' | 'xlsx' | 'xls' | 'csv' | 'txt' | 'json' | 'md' | 'pptx' | 'odt' | 'ods' | 'odp' | 'unknown'
 
 export function detectFormat(filename: string, mimetype?: string): FileFormat {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
@@ -10,6 +12,10 @@ export function detectFormat(filename: string, mimetype?: string): FileFormat {
   if (ext === 'docx' || mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx'
   if (ext === 'xlsx' || mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return 'xlsx'
   if (ext === 'xls' || mimetype === 'application/vnd.ms-excel') return 'xls'
+  if (ext === 'pptx' || mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') return 'pptx'
+  if (ext === 'odt' || mimetype === 'application/vnd.oasis.opendocument.text') return 'odt'
+  if (ext === 'ods' || mimetype === 'application/vnd.oasis.opendocument.spreadsheet') return 'ods'
+  if (ext === 'odp' || mimetype === 'application/vnd.oasis.opendocument.presentation') return 'odp'
   if (ext === 'csv' || mimetype === 'text/csv') return 'csv'
   if (ext === 'txt' || mimetype === 'text/plain') return 'txt'
   if (ext === 'json' || mimetype === 'application/json') return 'json'
@@ -39,6 +45,14 @@ export async function extract(buffer: Buffer, filename: string, mimetype?: strin
     case 'xlsx':
     case 'xls':
       text = extractXlsx(buffer)
+      break
+    case 'pptx':
+      text = extractPptx(buffer)
+      break
+    case 'odt':
+    case 'ods':
+    case 'odp':
+      text = extractOdf(buffer)
       break
     case 'csv':
     case 'txt':
