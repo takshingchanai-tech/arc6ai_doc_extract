@@ -1,0 +1,26 @@
+{
+  "name": "arc6ai_doc_extract",
+  "version": "1.0.0",
+  "description": "Document intelligence skill — extract structured data from PDF, DOCX, XLSX, CSV with judge-router pattern",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc --noEmit",
+    "start": "node --import tsx/esm src/server.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13",
+    "hono": "^4.6",
+    "mammoth": "^1.8",
+    "openai": "^4.73",
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/pdf-parse": "^1.1.4",
+    "dotenv": "^16",
+    "tsx": "^4.19",
+    "typescript": "^5.7"
+  }
+}
