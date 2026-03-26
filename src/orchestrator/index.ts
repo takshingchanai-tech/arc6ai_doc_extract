@@ -21,11 +21,37 @@ export interface ExtractionResponse {
   format: string
 }
 
-async function formatAsMarkdown(client: OpenAI, text: string, filename: string): Promise<string> {
+const CHUNK_SIZE = 24000   // chars per chunk (~6k tokens input)
+const CHUNK_MAX_TOKENS = 8000  // max output tokens per chunk
+
+function splitIntoChunks(text: string, size: number): string[] {
+  const chunks: string[] = []
+  let i = 0
+  while (i < text.length) {
+    // Try to break at a newline near the chunk boundary
+    let end = Math.min(i + size, text.length)
+    if (end < text.length) {
+      const lastNewline = text.lastIndexOf('\n', end)
+      if (lastNewline > i + size * 0.7) end = lastNewline + 1
+    }
+    chunks.push(text.slice(i, end))
+    i = end
+  }
+  return chunks
+}
+
+async function formatChunk(
+  client: OpenAI,
+  chunk: string,
+  filename: string,
+  chunkIndex: number,
+  totalChunks: number
+): Promise<string> {
+  const isFirst = chunkIndex === 0
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0,
-    max_tokens: 4000,
+    max_tokens: CHUNK_MAX_TOKENS,
     messages: [
       {
         role: 'system',
@@ -33,21 +59,36 @@ async function formatAsMarkdown(client: OpenAI, text: string, filename: string):
 
 Rules:
 - Preserve ALL content — do not summarise, omit, or analyse anything
-- Add clear structure: use # for the document title, ## for sections, bullet points for lists, and | tables | for tabular data
+- Add clear structure: use # for the document title (first chunk only), ## for sections, bullet points for lists, and | tables | for tabular data
 - Clean up redundant whitespace and OCR artifacts but keep all words
 - For spreadsheets/CSV: render data as Markdown tables
 - For presentations: use ## Slide N as headers
 - Do not add commentary, interpretation, or analysis
-- Output only the formatted Markdown, nothing else`
+- Output only the formatted Markdown, nothing else
+${!isFirst ? '- This is a continuation chunk — do NOT add a document title, just continue formatting the content' : ''}`
       },
       {
         role: 'user',
-        content: `Filename: ${filename}\n\n${text.slice(0, 12000)}`
+        content: `Filename: ${filename} (part ${chunkIndex + 1} of ${totalChunks})\n\n${chunk}`
       }
     ]
   })
+  return response.choices[0].message.content ?? chunk
+}
 
-  return response.choices[0].message.content ?? text
+async function formatAsMarkdown(client: OpenAI, text: string, filename: string): Promise<string> {
+  const chunks = splitIntoChunks(text, CHUNK_SIZE)
+
+  if (chunks.length === 1) {
+    return formatChunk(client, chunks[0], filename, 0, 1)
+  }
+
+  // Process all chunks in parallel
+  const formatted = await Promise.all(
+    chunks.map((chunk, i) => formatChunk(client, chunk, filename, i, chunks.length))
+  )
+
+  return formatted.join('\n\n')
 }
 
 export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
