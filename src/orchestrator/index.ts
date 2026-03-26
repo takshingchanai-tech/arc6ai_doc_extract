@@ -52,10 +52,12 @@ async function structureWithLLM(
   }
 }
 
+// Only these formats can be re-processed by the vision model
+const VISION_COMPATIBLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'])
+
 export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-  // Step 1: Try cheap text extraction
   let rawText: string
   let format: string
   let escalated = false
@@ -63,22 +65,23 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
   let judgeReason: string | undefined
 
   try {
+    // Step 1: Cheap text extraction
     const extracted = await extract(req.buffer, req.filename, req.mimetype)
     rawText = extracted.text
     format = extracted.format
 
-    // Step 2: Judge quality
-    const verdict = await judge(client, rawText, extracted.sizeBytes, req.schema)
-
-    if (verdict.escalate) {
-      escalated = true
-      judgeReason = verdict.reason
-      // Step 3: Escalate to vision
-      rawText = await extractWithVision(client, req.buffer, req.filename, req.schema)
-      method = 'vision'
+    // Step 2: Judge quality — but only escalate if format supports vision
+    if (VISION_COMPATIBLE.has(format)) {
+      const verdict = await judge(client, rawText, extracted.sizeBytes, req.schema)
+      if (verdict.escalate) {
+        escalated = true
+        judgeReason = verdict.reason
+        rawText = await extractWithVision(client, req.buffer, req.filename, req.schema)
+        method = 'vision'
+      }
     }
 
-    // Step 4: Structure output if schema provided
+    // Step 3: Structure output if schema provided
     const result = await structureWithLLM(client, rawText, req.schema)
 
     return {
@@ -90,7 +93,11 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
       format
     }
   } catch (err) {
-    // Text extraction failed entirely — try vision as last resort
+    // Text extraction failed entirely — try vision only if format supports it
+    const ext = req.filename.split('.').pop()?.toLowerCase() ?? 'unknown'
+    if (!VISION_COMPATIBLE.has(ext)) {
+      throw new Error(`Extraction failed: ${(err as Error).message}`)
+    }
     try {
       rawText = await extractWithVision(client, req.buffer, req.filename, req.schema)
       const result = await structureWithLLM(client, rawText, req.schema)
@@ -100,7 +107,7 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
         escalated: true,
         confidence: 'low',
         reason: `Text extraction failed: ${(err as Error).message}`,
-        format: req.filename.split('.').pop() ?? 'unknown'
+        format: ext
       }
     } catch (visionErr) {
       throw new Error(`All extraction methods failed. Last error: ${(visionErr as Error).message}`)
