@@ -2,24 +2,8 @@ import OpenAI from 'openai'
 import { extract } from '../extractor/index.js'
 import { judge } from '../judge/index.js'
 
-const VISUAL_INTELLIGENCE_URL = 'https://arc6ai-visual-intelligence.takshingchanai.workers.dev/analyze'
-
-async function callVisualIntelligence(buffer: Buffer, filename: string): Promise<string> {
-  const formData = new FormData()
-  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
-  formData.append('file', new File([arrayBuffer], filename))
-  formData.append('prompt', 'Extract all text and structured content from this document. Transcribe everything accurately and format as clean Markdown.')
-
-  const res = await fetch(VISUAL_INTELLIGENCE_URL, { method: 'POST', body: formData })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string }
-    throw new Error(err.error ?? `Visual intelligence call failed: ${res.status}`)
-  }
-  const data = await res.json() as { content: string }
-  return data.content
-}
-
-// Only these formats can be re-processed by the vision model
+// Only these formats could theoretically benefit from vision — used to decide
+// whether to return a "try visual-intelligence" suggestion
 const VISION_COMPATIBLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'])
 
 export interface ExtractionRequest {
@@ -29,12 +13,12 @@ export interface ExtractionRequest {
 }
 
 export interface ExtractionResponse {
-  content: string          // full extracted content formatted as Markdown
-  method: 'text' | 'vision'
-  escalated: boolean
+  content: string           // full extracted content formatted as Markdown, or a guidance message
+  method: 'text'
   confidence: 'high' | 'low'
-  reason?: string
+  reason?: string           // judge explanation when confidence is low
   format: string
+  suggestion?: 'visual-intelligence'  // set when the document needs vision to be processed
 }
 
 const CHUNK_SIZE = 24000   // chars per chunk (~6k tokens input)
@@ -44,7 +28,6 @@ function splitIntoChunks(text: string, size: number): string[] {
   const chunks: string[] = []
   let i = 0
   while (i < text.length) {
-    // Try to break at a newline near the chunk boundary
     let end = Math.min(i + size, text.length)
     if (end < text.length) {
       const lastNewline = text.lastIndexOf('\n', end)
@@ -99,7 +82,6 @@ async function formatAsMarkdown(client: OpenAI, text: string, filename: string):
     return formatChunk(client, chunks[0], filename, 0, 1)
   }
 
-  // Process all chunks in parallel
   const formatted = await Promise.all(
     chunks.map((chunk, i) => formatChunk(client, chunk, filename, i, chunks.length))
   )
@@ -112,9 +94,6 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
 
   let rawText: string
   let format: string
-  let escalated = false
-  let method: 'text' | 'vision' = 'text'
-  let judgeReason: string | undefined
 
   try {
     // Step 1: Cheap text extraction
@@ -122,41 +101,39 @@ export async function run(req: ExtractionRequest): Promise<ExtractionResponse> {
     rawText = extracted.text
     format = extracted.format
 
-    // Step 2: Judge quality — only escalate if format supports vision
+    // Step 2: Judge quality — if poor and format is image/PDF, suggest visual-intelligence
     if (VISION_COMPATIBLE.has(format)) {
       const verdict = await judge(client, rawText, extracted.sizeBytes)
       if (verdict.escalate) {
-        escalated = true
-        judgeReason = verdict.reason
-        rawText = await callVisualIntelligence(req.buffer, req.filename)
-        method = 'vision'
+        return {
+          content: `This document appears to be a **scanned or image-only ${format.toUpperCase()}**. No readable text layer was found.\n\nTo extract content from this document, please use the **Visual Intelligence** skill — it uses GPT-4o Vision to read images and scanned documents.`,
+          method: 'text',
+          confidence: 'low',
+          reason: verdict.reason,
+          format,
+          suggestion: 'visual-intelligence',
+        }
       }
     }
 
-    // Step 3: Format full content as clean Markdown (no information loss)
+    // Step 3: Format full content as clean Markdown
     const content = await formatAsMarkdown(client, rawText, req.filename)
 
-    return { content, method, escalated, confidence: escalated ? 'low' : 'high', reason: judgeReason, format }
+    return { content, method: 'text', confidence: 'high', format }
 
   } catch (err) {
-    // Text extraction failed — try vision only if format supports it
+    // Text extraction failed entirely — if vision-compatible, suggest visual-intelligence
     const ext = req.filename.split('.').pop()?.toLowerCase() ?? 'unknown'
-    if (!VISION_COMPATIBLE.has(ext)) {
-      throw new Error(`Extraction failed: ${(err as Error).message}`)
-    }
-    try {
-      rawText = await callVisualIntelligence(req.buffer, req.filename)
-      const content = await formatAsMarkdown(client, rawText, req.filename)
+    if (VISION_COMPATIBLE.has(ext)) {
       return {
-        content,
-        method: 'vision',
-        escalated: true,
+        content: `Text extraction failed for this **${ext.toUpperCase()}** file. It may be a scanned document or image-only PDF.\n\nTo extract content from this document, please use the **Visual Intelligence** skill.`,
+        method: 'text',
         confidence: 'low',
         reason: `Text extraction failed: ${(err as Error).message}`,
-        format: ext
+        format: ext,
+        suggestion: 'visual-intelligence',
       }
-    } catch (visionErr) {
-      throw new Error(`All extraction methods failed. Last error: ${(visionErr as Error).message}`)
     }
+    throw new Error(`Extraction failed: ${(err as Error).message}`)
   }
 }
